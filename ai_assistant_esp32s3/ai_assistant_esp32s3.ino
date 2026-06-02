@@ -16,7 +16,7 @@ constexpr char GEMINI_TTS_MODEL[] = "gemini-2.5-flash-preview-tts";
 constexpr char GEMINI_TTS_VOICE[] = "Kore";
 
 constexpr int SPEAKER_I2S_LRCLK_PIN = 45;  // MAX98357A LRC.
-constexpr int SPEAKER_I2S_BCLK_PIN = 48;   // MAX98357A BCLK.
+constexpr int SPEAKER_I2S_BCLK_PIN = 16;   // MAX98357A BCLK.
 constexpr int SPEAKER_I2S_DOUT_PIN = 47;   // MAX98357A DIN.
 constexpr int MIC_I2S_WS_PIN = 4;          // Mic WS.
 constexpr int MIC_I2S_SCK_PIN = 5;         // Mic SCK.
@@ -28,6 +28,12 @@ constexpr int BUTTON_INPUT_PIN = 15;
 
 constexpr int NEOPIXEL_PIN = 48;
 constexpr uint8_t NEOPIXEL_BRIGHTNESS = 32;
+static_assert(NEOPIXEL_PIN != SPEAKER_I2S_BCLK_PIN,
+              "NeoPixel pin must not share speaker I2S BCLK");
+static_assert(NEOPIXEL_PIN != SPEAKER_I2S_LRCLK_PIN,
+              "NeoPixel pin must not share speaker I2S LRCLK");
+static_assert(NEOPIXEL_PIN != SPEAKER_I2S_DOUT_PIN,
+              "NeoPixel pin must not share speaker I2S DOUT");
 
 constexpr uint32_t AUDIO_SAMPLE_RATE = 11025;
 constexpr uint32_t TTS_SAMPLE_RATE = 24000;
