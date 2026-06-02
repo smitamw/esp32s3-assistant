@@ -8,9 +8,9 @@
 #include <esp_intr_alloc.h>
 #include <mbedtls/base64.h>
 
-constexpr char WIFI_SSID[] = "Zapisco";
-constexpr char WIFI_PASSWORD[] = "Zapisco2020@757!";
-constexpr char GEMINI_API_KEY[] = "AIzaSyDwf5F52Zz_CLpWTrTQ_U9CJvhRyOjkGjs";
+constexpr char WIFI_SSID[] = "YOUR_WIFI_HERE";
+constexpr char WIFI_PASSWORD[] = "YOUR_PASSWORD_HERE";
+constexpr char GEMINI_API_KEY[] = "YOUR_API_KEY_HERE";
 constexpr char GEMINI_TEXT_MODEL[] = "gemini-3-flash-preview";
 constexpr char GEMINI_TTS_MODEL[] = "gemini-2.5-flash-preview-tts";
 constexpr char GEMINI_TTS_VOICE[] = "Kore";
