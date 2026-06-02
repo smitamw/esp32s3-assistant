@@ -15,7 +15,7 @@ This repository contains a single Arduino sketch, `sketch_may9a_speakertest.ino`
 ## Pin Map
 
 - MAX98357A LRC/LRCLK: GPIO 45 (`SPEAKER_I2S_LRCLK_PIN`)
-- MAX98357A BCLK: GPIO 48 (`SPEAKER_I2S_BCLK_PIN`)
+- MAX98357A BCLK: GPIO 16 (`SPEAKER_I2S_BCLK_PIN`)
 - MAX98357A DIN: GPIO 47 (`SPEAKER_I2S_DOUT_PIN`)
 - MAX98357A SD/shutdown: GPIO 9 (`AMP_SD_PIN`)
 - INMP441 WS: GPIO 4 (`MIC_I2S_WS_PIN`)
@@ -25,7 +25,7 @@ This repository contains a single Arduino sketch, `sketch_may9a_speakertest.ino`
 - Button input: GPIO 15 (`BUTTON_INPUT_PIN`)
 - NeoPixel: GPIO 48 (`NEOPIXEL_PIN`)
 
-Note: GPIO 48 is currently assigned to both `SPEAKER_I2S_BCLK_PIN` and `NEOPIXEL_PIN`. Treat this as intentional only if the board wiring confirms it; otherwise this is a likely hardware conflict to resolve before changing audio or LED behavior.
+Note: GPIO 48 is reserved for the onboard NeoPixel (`NEOPIXEL_PIN`). Keep speaker I2S signals off GPIO 48 unless the board wiring is intentionally changed and NeoPixel feedback is disabled or moved.
 
 ## Runtime Flow
 
