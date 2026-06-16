@@ -25,7 +25,7 @@ This repository contains a single Arduino sketch, `sketch_may9a_speakertest.ino`
 - Button input: GPIO 15 (`BUTTON_INPUT_PIN`)
 - NeoPixel: GPIO 48 (`NEOPIXEL_PIN`)
 
-Note: GPIO 48 is reserved for the onboard NeoPixel (`NEOPIXEL_PIN`). Keep speaker I2S signals off GPIO 48 unless the board wiring is intentionally changed and NeoPixel feedback is disabled or moved.
+*Note: GPIO 48 is reserved for the onboard NeoPixel (`NEOPIXEL_PIN`). Keep speaker I2S signals off GPIO 48 unless the board wiring is intentionally changed and NeoPixel feedback is disabled or moved.*
 
 ## Runtime Flow
 
@@ -43,7 +43,7 @@ Note: GPIO 48 is reserved for the onboard NeoPixel (`NEOPIXEL_PIN`). Keep speake
 - Gemini TTS uses `GEMINI_TTS_MODEL` and `GEMINI_TTS_VOICE`; the current documented single-speaker REST model is `gemini-2.5-flash-preview-tts`.
 - TLS is currently configured with `client.setInsecure()`.
 
-The sketch currently contains Wi-Fi credentials and a Gemini API key inline. Future agents should avoid copying those values into logs, documentation, commits, or issue text. Prefer moving secrets to a local untracked header or build-time configuration if asked to harden the project.
+**The sketch currently contains placeholder Wi-Fi credentials and a Gemini API key inline.**
 
 ## Audio Details
 
@@ -71,7 +71,7 @@ The sketch currently contains Wi-Fi credentials and a Gemini API key inline. Fut
 - `geminiGenerateTextInline()` is still present as an alternate direct inline-base64 request path, but `processAssistantRequest()` does not currently call it.
 - `startGeminiFileUpload()` uses `HTTPClient` to get the resumable upload URL, while `uploadRecordedWavFile()` uses raw `WiFiClientSecure` writes so the WAV header and recorded PCM can be sent without building one large body in memory.
 - TTS requests use raw `WiFiClientSecure` HTTP rather than `HTTPClient`, because the code needs incremental response parsing and playback while bytes arrive.
-- JSON parsing is intentionally lightweight and string-based to fit the Arduino environment. Be cautious when changing Gemini response handling because the code depends on specific key order/anchors in a few places.
+- JSON parsing is intentionally lightweight and string-based to fit the Arduino environment. **Be cautious when changing Gemini response handling because the code depends on specific key order/anchors in a few places.**
 
 ## Maintenance Guidance
 
