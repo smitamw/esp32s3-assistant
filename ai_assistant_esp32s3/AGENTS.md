@@ -2,7 +2,7 @@
 
 ## Project Purpose
 
-This repository contains a single Arduino sketch, `sketch_may9a_speakertest.ino`, for an AI voice assistant running on an ESP32-S3. The device records microphone audio, sends it to Gemini, receives a concise text answer, converts that answer to speech, and plays it through an I2S amplifier.
+This repository contains a single Arduino sketch, `ai_assistant_esp32s3.ino`, for an AI voice assistant running on an ESP32-S3. The device records microphone audio, streams it to the Gemini **Live API** (audio-to-audio), and plays the model's spoken reply through an I2S amplifier. There is no separate speech-to-text, text, or text-to-speech step: a single bidirectional WebSocket session handles the whole turn.
 
 ## Hardware Context
 
@@ -27,59 +27,59 @@ This repository contains a single Arduino sketch, `sketch_may9a_speakertest.ino`
 
 *Note: GPIO 48 is reserved for the onboard NeoPixel (`NEOPIXEL_PIN`). Keep speaker I2S signals off GPIO 48 unless the board wiring is intentionally changed and NeoPixel feedback is disabled or moved.*
 
+## Dependencies
+
+- **`WebSockets_Generic`** (Khoi Hoang's fork of `links2004/arduinoWebSockets`) provides the `wss://` client via the `WebSocketsClient` class: HTTP upgrade handshake, TLS, frame masking, and ping/pong. Install it via the Arduino Library Manager before compiling. Its header is `WebSocketsClient_Generic.h` (note the `_Generic` suffix); the class/API are identical to the upstream library, so the upstream `links2004/arduinoWebSockets` works too if you switch the include back to `WebSocketsClient.h`.
+- The repo still declares no Arduino CLI / PlatformIO / test configuration; the library must be installed in the build environment manually.
+- `WebSocketsClient::beginSSL()` is used without a pinned CA (insecure TLS), matching the project's prior `setInsecure()` behaviour. If certificate validation is wanted, switch to `beginSslWithCA()`.
+- **Frame-size patch (required).** Gemini Live audio frames exceed the library's default 15 KB cap, which otherwise force-closes the socket with close code 1009 mid-reply. The library header `WebSockets_Generic.h` (around line 146) is patched to wrap its `#define WEBSOCKETS_MAX_DATA_SIZE (15 * 1024)` in an `#ifndef … #endif` guard, and the sketch raises it to `256 * 1024` with a `#define` placed **before** `#include <WebSocketsClient_Generic.h>` (works because the library is header-only). Keep this cap well below `AUDIO_FIFO_CAP` so a single frame can't overflow the playback ring. **This library edit must be re-applied if `WebSockets_Generic` is updated.**
+- **PSRAM must be enabled** in the board menu (Tools → PSRAM). The library `malloc`s each frame; with PSRAM enabled the Arduino-ESP32 allocator routes large allocations to PSRAM instead of internal RAM.
+
 ## Runtime Flow
 
-- `setup()` initializes Serial, amp shutdown, NeoPixel, button pins, the recording buffer, an optional boot speaker test tone, then enters microphone mode.
-- `loop()` debounces the button and dispatches work based on `audioMode`.
-- In microphone mode, the sketch installs I2S RX at `AUDIO_SAMPLE_RATE` (`11025 Hz`), reads 32-bit stereo I2S frames from the INMP441, chooses the louder decoded channel, and stores mono 16-bit samples.
-- Pressing the button while recording calls `processAssistantRequest()`: it stops I2S, connects Wi-Fi, uploads the recorded WAV to Gemini, asks Gemini for a concise response, then streams Gemini TTS directly to the speaker with `geminiTtsStreamToSpeaker()`.
-- The older buffered speaker mode is still present: `enterSpeakerMode()` installs I2S TX at the returned TTS sample rate, enables the MAX98357A with `AMP_SD_PIN`, duplicates mono PCM to left/right output samples, applies `PLAYBACK_GAIN`, writes chunks through I2S, and returns to microphone mode when playback ends. `processAssistantRequest()` does not currently use this buffered path.
+- `setup()` initializes Serial, amp shutdown, NeoPixel, button pins, plays an optional boot speaker test tone, connects Wi-Fi, then enters Idle.
+- `loop()` pumps `webSocket.loop()`, debounces the button, and (only while capturing) reads the mic and streams it.
+- A turn is a **press-to-start / press-to-stop**, half-duplex interaction driven by `AppState`:
+  - **Idle** (red LED): mic I2S installed at `AUDIO_SAMPLE_RATE` (`16000 Hz`), not streaming. Waiting for a press.
+  - **Capturing** (amber LED): on the first press, `ensureLiveSession()` connects the WebSocket if needed, `activityStart` is sent, and mic frames stream up.
+  - **Responding** (thinking animation, then green): the second press sends `activityEnd`, switches I2S to speaker TX at `TTS_SAMPLE_RATE` (`24000 Hz`), enables the MAX98357A, and plays Gemini audio from the playback FIFO (see Audio Details).
+- The device returns to Idle once `serverContent.turnComplete` has been seen **and** the playback FIFO has drained. A press during Responding cancels playback and returns to Idle (further audio for that turn is ignored). A mid-turn WebSocket disconnect sets `resetPending`, which `loop()` honors by aborting to Idle.
+- The single I2S peripheral (`I2S_NUM_0`) is uninstalled and reinstalled when switching between microphone RX and speaker TX; the half-duplex turn structure maps onto this naturally.
 
-## Network and AI APIs
+## Gemini Live API
 
-- The sketch uses `WiFi`, `WiFiClientSecure`, and `HTTPClient`.
-- Gemini file upload uses the resumable upload endpoint.
-- Gemini text generation uses `GEMINI_TEXT_MODEL`.
-- Gemini TTS uses `GEMINI_TTS_MODEL` and `GEMINI_TTS_VOICE`; the current documented single-speaker REST model is `gemini-2.5-flash-preview-tts`.
-- TLS is currently configured with `client.setInsecure()`.
-
-**The sketch currently contains placeholder Wi-Fi credentials and a Gemini API key inline.**
+- Transport is a single bidirectional WebSocket:
+  `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=API_KEY`
+- Model: `GEMINI_LIVE_MODEL` = `gemini-3.1-flash-live-preview` ("Gemini 3 Flash Live"), an audio-to-audio model. `GEMINI_TTS_VOICE` selects the prebuilt voice via the setup `speechConfig`.
+- First message is `BidiGenerateContentSetup` (`liveSendSetup()`): model, `responseModalities:["AUDIO"]`, `speechConfig` voice, a system instruction, and `realtimeInputConfig.automaticActivityDetection.disabled=true` for manual turn control.
+- Input audio: raw little-endian 16-bit mono PCM @ 16 kHz, base64-encoded and sent as `realtimeInput.audio` JSON messages with `mimeType` `audio/pcm;rate=16000` (`sendMicChunk()`).
+- Output audio: raw little-endian 16-bit mono PCM @ 24 kHz, arriving in `serverContent.modelTurn.parts[].inlineData.data` (base64). `enqueueLiveAudio()` decodes it into the playback FIFO; `drainPlaybackChunk()` plays it (see Audio Details).
+- Turn signals handled: `setupComplete`, `serverContent.turnComplete` (sets `turnCompleteSeen`). Activity is bracketed by `activityStart` / `activityEnd`.
+- TLS uses insecure mode (no CA pinned) — see Dependencies.
 
 ## Audio Details
 
-- Recording limit: `MAX_RECORDING_SECONDS` is 5 seconds.
-- Recording buffer is allocated from PSRAM when possible, then regular heap as a fallback.
-- Microphone samples are decoded by shifting raw 32-bit I2S samples right by `MIC_SAMPLE_SHIFT` (`16`).
-- TTS output may arrive as raw PCM or WAV-like audio; helper functions parse headers, sample rates, and base64 payloads.
-- The MAX98357A playback path expects 16-bit PCM samples and writes duplicated stereo frames.
-- `PRINT_MIC_RAW_DEBUG` is currently `true`, so the sketch prints raw I2S microphone statistics about once per second.
-- `PLAY_TEST_TONE_ON_BOOT` is currently `true`, so boot temporarily switches to speaker I2S and plays a short square-wave test tone before entering microphone mode.
+- Microphone samples are decoded by shifting raw 32-bit I2S samples right by `MIC_SAMPLE_SHIFT` (`16`); the louder of the two decoded channels is kept (`chooseMicSample`).
+- Mic audio is streamed continuously while capturing — there is no fixed recording-length cap and no large PSRAM clip buffer. Samples are batched in `micSendBuffer` (`MIC_SEND_SAMPLES`, ~64 ms) and sent per chunk.
+- The MAX98357A playback path expects 16-bit PCM and writes duplicated stereo frames; `PLAYBACK_GAIN` is applied per sample.
+- **Playback FIFO + dedicated task (decoupled from the WebSocket).** Audio is *not* written to I2S from inside the WS callback — doing so blocks `webSocket.loop()` and starves server PING/PONG, dropping the session. It's a single-producer/single-consumer PSRAM ring (`audioFifo`, `AUDIO_FIFO_CAP` = 2 MB, allocated once in `setup()`):
+  - **Producer** — `enqueueLiveAudio()` runs in the WS callback (loop()/core 1): base64-decodes audio and appends raw PCM via `audioFifoPush()`, advancing `audioFifoHead`. Returns immediately.
+  - **Consumer** — `playbackTask()` runs pinned to **core 0**, draining one `MONO_SAMPLES_PER_CHUNK` block at a time via `drainPlaybackChunk()` → `writeSpeakerSamples()`, advancing `audioFifoTail`. Because it runs on a different core, it keeps feeding I2S at real time even while core 1 blocks ingesting a large frame. Real-time pacing comes from the blocking `i2s_write`.
+  - The ring is large because Gemini delivers a reply faster than real time, so the buffer must hold the whole lead. `head == tail` is empty (one slot kept unused); indices are `volatile` and published after the data with `__sync_synchronize()`, so the SPSC ring is safe across cores without a lock. Decoded bytes are appended contiguously, so 16-bit alignment is preserved across frames. A ~150 ms pre-buffer (`PLAYBACK_PREBUFFER_BYTES`) avoids initial underrun.
+  - **I2S teardown safety:** `playbackRunning` gates the task; before switching the I2S bus (`enterIdle`), `stopPlaybackAndWait()` clears it and waits for `playbackTaskIdle`, so the task is never mid-`i2s_write` during uninstall. `endCapture` sets `playbackRunning = true` only after the speaker bus is installed. `loop()` ends the turn when `turnCompleteSeen` and the ring has drained (`audioFifoFill() < 2`).
+- `PRINT_MIC_RAW_DEBUG` is `true`, so the sketch prints raw I2S microphone statistics about once per second while capturing.
+- `PLAY_TEST_TONE_ON_BOOT` is `true`, so boot temporarily switches to speaker I2S and plays a short square-wave test tone before entering Idle.
 
-## TTS Playback Notes
-
-- The active TTS path is `geminiTtsStreamToSpeaker()`. It reads HTTP headers/body incrementally, parses the Gemini JSON response while bytes arrive, base64-decodes audio quartets, starts I2S TX once the raw PCM or WAV format is known, and writes samples directly to the MAX98357A path.
-- The streaming TTS path supports raw 16-bit little-endian PCM-like audio and 16-bit PCM WAV. Stereo WAV is mixed down to mono before being duplicated to left/right I2S output.
-- The streaming TTS path keeps only a small WAV header buffer (`WAV_HDR_MAX`, currently 128 bytes) plus sample frame buffers; large TTS audio is not stored in RAM during normal playback.
-- Pressing the button during streaming TTS is checked after output chunks are written and interrupts playback.
-- `geminiTextToSpeech()` and `readGeminiTtsAudioResponse()` are the older buffered TTS path. They stream JSON parsing into a linked list of `TtsPcmChunk` buffers of `TTS_PCM_CHUNK_BYTES` bytes each, allocated from PSRAM when possible, then normalize/play via the buffered speaker helpers.
-- The TTS sample rate is inferred from the response MIME type using `rate=` or `sample_rate=`, with `TTS_SAMPLE_RATE` (`24000 Hz`) as a fallback.
-- TTS requests retry up to `GEMINI_TTS_MAX_ATTEMPTS` only for HTTP 5xx responses or connection failures; 4xx errors are treated as request/configuration problems.
-
-## API Flow Notes
-
-- The active text path is `geminiGenerateText()`, which uploads a WAV through the Gemini resumable file API and then calls `geminiGenerateTextFromFile()`.
-- `geminiGenerateTextInline()` is still present as an alternate direct inline-base64 request path, but `processAssistantRequest()` does not currently call it.
-- `startGeminiFileUpload()` uses `HTTPClient` to get the resumable upload URL, while `uploadRecordedWavFile()` uses raw `WiFiClientSecure` writes so the WAV header and recorded PCM can be sent without building one large body in memory.
-- TTS requests use raw `WiFiClientSecure` HTTP rather than `HTTPClient`, because the code needs incremental response parsing and playback while bytes arrive.
-- JSON parsing is intentionally lightweight and string-based to fit the Arduino environment. **Be cautious when changing Gemini response handling because the code depends on specific key order/anchors in a few places.**
+**The sketch currently contains placeholder Wi-Fi credentials and a Gemini API key inline.**
 
 ## Maintenance Guidance
 
 - Keep the sketch Arduino-compatible C++ and preserve the existing style: `constexpr` constants, small helpers, and explicit Serial diagnostics.
-- Be careful when changing I2S setup. The code intentionally uninstalls and reinstalls I2S0 when switching between microphone RX and speaker TX.
-- Keep memory usage in mind. Audio buffers can be large for an ESP32-S3, and TTS audio is dynamically allocated.
-- If changing button behavior, remember the input is active-low and debounced in `handleButton()`.
-- Pressing the button during speaker playback cancels the response and returns to microphone mode.
-- If changing NeoPixel feedback, check interactions between the thinking animation task and audio timing.
+- Be careful when changing I2S setup. The code intentionally uninstalls and reinstalls I2S0 when switching between microphone RX (16 kHz, 32-bit) and speaker TX (24 kHz, 16-bit).
+- `webSocket.loop()` must be called frequently; server messages are handled in the `onWsEvent` callback, which runs synchronously inside `webSocket.loop()`. **The callback must never block** (e.g. on `i2s_write`) — it only decodes audio into the FIFO; playback happens in `loop()`. Blocking here drops the session.
+- JSON parsing of server messages is intentionally lightweight: `bufFind`/`bufContains` scan the raw frame for tokens like `inlineData`, `data`, `setupComplete`, and `turnComplete`. **Be cautious changing this — it depends on those literal field names.** Both camelCase and snake_case variants (`inlineData`/`inline_data`) are checked.
+- Server frames may arrive as text or binary; `onWsEvent` handles `WStype_TEXT` and `WStype_BIN` identically.
+- If changing button behavior, remember the input is active-low and debounced in `handleButton()`, and the turn flow is press-to-start / press-to-stop, with a third press cancelling playback.
+- If changing NeoPixel feedback, check interactions between the thinking-animation task and audio timing.
 - Do not remove the `ESP_IDF_VERSION_MAJOR` conditional for I2S communication format or MCLK pin handling unless the supported Arduino/ESP-IDF version is known.
 - This folder currently has only `AGENTS.md` and the `.ino` sketch; there is no committed Arduino CLI, PlatformIO, or test configuration in the project directory.
